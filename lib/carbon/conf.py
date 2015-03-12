@@ -12,6 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License."""
 
+import importlib
 import os
 import sys
 import pwd
@@ -486,17 +487,29 @@ def read_writer_configs():
   db_settings = settings.read_file('db.conf')
   writer_settings = settings.read_file('writer.conf')
 
-  db = db_settings['DATABASE']
-
   settings['STORAGE_RULES'] = load_storage_rules(settings)
   settings['CACHE_SIZE_LOW_WATERMARK'] = settings.MAX_CACHE_SIZE * 0.95
 
-  # Database-specific settings
-  if db not in TimeSeriesDatabase.plugins:
-    raise ConfigError("No database plugin implemented for '%s'" % db)
-
-  DatabasePlugin = TimeSeriesDatabase.plugins[db]
-  state.database = DatabasePlugin(settings)
+  # Import any configured database plugin class
+  db_plugin = db_settings['DATABASE_PLUGIN']
+  if db_plugin is not None:
+    # expect package.class or package.module.class
+    module_name, _, cls_name = db_plugin.rpartition(".") 
+    if not all((module_name, cls_name)):
+      raise ConfigError("Could not extract module name and class name from "\
+        "DATABASE_PLUGIN %s" % (db_plugin,))
+    try:
+      module = importlib.import_module(module_name)
+    except (ImportError) as e:
+      raise ConfigError("Error importing module %s for database plugin %s, "\
+        "%s" % (module_name, db_plugin, str(e)))
+    
+    try:
+      db_cls = getattr(module, cls_name)
+    except (AttributeError) as e:
+      raise ConfigError("Unknown class %s for database plugin %s, "\
+        "%s" % (cls_name, db_plugin, str(e)))
+    state.database = db_cls(settings)
 
 
 def load_storage_rules(settings):
